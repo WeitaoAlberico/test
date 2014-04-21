@@ -10,7 +10,7 @@
 * User#Num: mojombo#1
 * User/Repository#Num: mojombo/jekyll#1
 
-# heading 1
+# heading 1 <a name="ab"></a>
 ## heading 2
 
 
@@ -36,3 +36,5 @@ Markdown | Less | Pretty
 --- | --- | ---
 *Still* | `renders` | **nicely**
 1 | 2 | 3
+
+[link](#ab) back to heading 1
