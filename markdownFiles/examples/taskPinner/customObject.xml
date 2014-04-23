@@ -1,0 +1,24 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<!DOCTYPE Custom PUBLIC "sailpoint.dtd" "sailpoint.dtd">
+<Custom name="restTaskLauncher">
+    <Attributes>
+        <Map>
+            <entry key="authWorkGroupName" value="restTaskLauncher"/>
+            <entry key="authIdentityName" value="spadmin" />
+            <entry key="authorizedIdentities">
+                <value>
+                    <List>
+                        <String>spadmin</String>
+                    </List>
+                </value>
+            </entry>
+            <entry key="authorizedWorkgroups">
+                <value>
+                    <List>
+                        <String>Rest Task Launcher</String>
+                    </List>
+                </value>
+            </entry>
+        </Map>
+    </Attributes>
+</Custom>

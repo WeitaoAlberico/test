@@ -1,0 +1,353 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<!DOCTYPE Rule PUBLIC "sailpoint.dtd" "sailpoint.dtd">
+<Rule language="beanshell" name="Access_Request_Status_Report" type="Integration">
+  <Description></Description>
+  <Source>
+<![CDATA[  
+
+import java.util.Date;
+import java.util.HashMap;
+import java.util.Iterator;
+import java.util.ListIterator;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import sailpoint.api.*;
+import sailpoint.object.*;
+import sailpoint.object.ProvisioningPlan;
+import sailpoint.object.ProvisioningPlan.AccountRequest;
+import org.apache.log4j.Logger;
+import org.apache.log4j.Level;
+
+
+List runReport(){
+	List dataRows = new ArrayList();
+
+	initSecondaryFilters();
+
+	QueryOptions qo = new QueryOptions();
+	//qo.setOrderBy("type,name");
+	//reportAttributes
+	if(reportAttributes.get("requestDateRange") != null){
+		log.debug("Report has a date range.");
+		Map requestDateRange = (Map)reportAttributes.get("requestDateRange");
+		Long start = requestDateRange.get("start");
+		Long end = requestDateRange.get("end");
+		if(start != null){
+			log.debug("Setting start filter for:" + start);
+			qo.addFilter(Filter.ge("created", new Date(start)));
+		}
+		if(end != null){
+			log.debug("Setting end filter for:" + end);
+			qo.addFilter(Filter.le("created", new Date(end + 24*3600000)));
+		}
+	}
+
+	if(reportAttributes.get("requestees") != null){
+		List requestees = (List)reportAttributes.get("requestees");
+		if(requestees.size() > 0){
+			qo.addFilter(Filter.in("targetId", requestees));
+		}
+	}
+
+	if(reportAttributes.get("requesters") != null){
+		List requesters = (List)reportAttributes.get("requesters");
+		if(requesters.size() > 0){
+			qo.addFilter(Filter.in("requesterId", requesters));
+		}
+	}
+
+	if(reportAttributes.get("status") != null){
+		String status = reportAttributes.get("status");
+		if(!"all".equalsIgnoreCase(status)){
+			qo.addFilter(Filter.eq("state", status));
+		}
+	}
+
+	qo.setResultLimit(reportAttributes.getInt("maxResults", 500) + 1);
+
+	Iterator it = context.search(IdentityRequest.class, qo);
+	int i = 1;
+	while (it.hasNext()) {
+	   Map row = new HashMap();
+	   IdentityRequest ir = (IdentityRequest) it.next();
+	   i++;
+			row.put("openDate", ir.getCreated());
+			row.put("identityRequestId", ir.getName());
+            String requesterDisplay = getDisplayForIdentity(ir.getRequesterId());
+            String requesteeDisplay = getDisplayForIdentity(ir.getTargetId());
+			row.put("requester", requesterDisplay);
+			row.put("requestee", requesteeDisplay);
+
+
+			row.put("completionDate", ir.getEndDate());
+			long millis = new Date().getTime() - ir.getCreated().getTime();
+			if(ir.getEndDate() != null){
+			    millis = ir.getEndDate().getTime() - ir.getCreated().getTime();
+			}
+			long days = millis / (24 * 3600000);
+		  	row.put("daysOpen", days);
+
+		  	Boolean shouldInclude = checkSecondaryFilters(ir);
+		  	if(!shouldInclude){
+		  		log.debug("SecondaryFilter did not match. Excluding:" + ir.getName());
+		  	}else{
+
+			  	//This section will look at what was requested. If it was a role, the role will be fetched
+			  	//and additional details will be determined.
+				for(IdentityRequestItem iri : ir.getItems()){
+		            String name = iri.getName();
+		            if(name != null && name.equals("assignedRoles")) {
+			            String roleName = iri.getValue();
+
+			            String operation = iri.getOperation();
+			            Bundle role = context.getObject(Bundle.class, roleName);
+			            String approverRule = "";
+			            String slaApprover = "";
+			            Set applications = null;
+                        String slaApproverDisplay = "";
+			            if(role != null){
+			                approverRule = role.getAttribute("approverRule");
+			                slaApprover = role.getAttribute("slaApprover");
+			                applications = getApplicationsForRole(role);
+                            if(slaApprover != null){
+                                slaApproverDisplay = getDisplayForIdentity(slaApprover);
+                            }
+			            }
+                        
+			            Map rowNext = new HashMap(row);
+			            rowNext.put("workItemNumber", "N/A");
+			            rowNext.put("workItemDescription", "N/A");
+			            rowNext.put("approver", "N/A");
+						rowNext.put("status", ir.getState());
+
+			            rowNext.put("roleName", roleName);
+			            rowNext.put("operation", operation);
+			            rowNext.put("approverRule", approverRule);
+                        
+			            rowNext.put("slaApprover", slaApproverDisplay);
+			            rowNext.put("applications", applications);
+			            dataRows.add(rowNext);
+		        	}
+	        	}
+
+	        	if(ir.getApprovalSummaries() != null){
+		        	for(WorkflowSummary.ApprovalSummary approvalSummary : ir.getApprovalSummaries()){
+			            String approver = approvalSummary.getOwner();
+                        String approverDisplay = getDisplayForIdentity(approver);
+			            String status = approvalSummary.getStateKey();
+			            String workItemId = approvalSummary.getWorkItemId();
+			            String workItemNumber = "";
+			            WorkItem workItem = context.getObject(WorkItem.class, workItemId);
+			            String workItemDesc = "";
+			            if(workItem != null){
+			            	workItemNumber = workItem.getName();
+			                workItemDesc = workItem.getDescription();
+			            }
+                        
+                        long millis = new Date().getTime() - approvalSummary.getStartDate().getTime();
+                        if(approvalSummary.getEndDate() != null){
+                            millis = approvalSummary.getEndDate().getTime() - approvalSummary.getStartDate().getTime();
+                        }
+                        long days = millis / (24 * 3600000);
+		  	
+			            Map rowNext = new HashMap(row);
+			            rowNext.put("workItemNumber", workItemNumber);
+			            rowNext.put("workItemDescription", workItemDesc);
+			            rowNext.put("approver", approverDisplay);
+						rowNext.put("status", status);
+                        rowNext.put("completionDate", approvalSummary.getEndDate());
+                        rowNext.put("daysOpen", days);
+
+			            rowNext.put("roleName", "N/A");
+			            rowNext.put("operation", "N/A");
+			            rowNext.put("approverRule", "N/A");
+			            rowNext.put("slaApprover", "N/A");
+			            dataRows.add(rowNext);
+		       		}
+	       		}
+
+	       		log.debug("Searching for workItems");
+				QueryOptions queryOptions = new QueryOptions();
+	        	queryOptions.addFilter(Filter.eq("identityRequestId", ir.getName()));
+	        	List workItems = context.getObjects(WorkItem.class, queryOptions);
+	        	for(WorkItem workItem : workItems){
+	        		log.debug("got a workitem name:" + workItem.getName());
+		            String approver = workItem.getOwner() == null ? "" : workItem.getOwner().getName();
+                    String approverDisplay = getDisplayForIdentity(approver);
+		            String status = "Pending";
+		            String workItemNumber = workItem.getName();
+		            String workItemDesc = workItem.getDescription();
+
+		            Map rowNext = new HashMap(row);
+		            rowNext.put("workItemNumber", workItemNumber);
+		            rowNext.put("workItemDescription", workItemDesc);
+		            rowNext.put("approver", approverDisplay);
+					rowNext.put("status", status);
+
+		            rowNext.put("roleName", "N/A");
+		            rowNext.put("operation", "N/A");
+		            rowNext.put("approverRule", "N/A");
+		            rowNext.put("slaApprover", "N/A");
+		            dataRows.add(rowNext);
+	       		}
+	       	}
+	   if ((i % 100) == 0) { context.decache(); }
+	}
+	context.decache();  
+	return dataRows;
+}
+
+	Set roleNames = new TreeSet(String.CASE_INSENSITIVE_ORDER);
+	Set appNames = new TreeSet(String.CASE_INSENSITIVE_ORDER);
+	Set approverNames = new TreeSet(String.CASE_INSENSITIVE_ORDER);
+
+void initSecondaryFilters(){
+	log.debug("Enter: initSecondaryFilters");
+	if(reportAttributes.get("roles") != null){
+		for(String bundleId : reportAttributes.getList("roles")){
+			Bundle bundle = context.getObject(Bundle.class, bundleId);
+			if(bundle != null ){
+				roleNames.add(bundle.getName());
+			}
+		}
+		log.debug("Filter by roles:" + roleNames);
+	}
+
+	if(reportAttributes.get("applications") != null){
+		for(String appId : reportAttributes.getList("applications")){
+			Application app = context.getObject(Application.class, appId);
+			if(app != null ){
+				appNames.add(app.getName());
+			}
+		}
+		log.debug("Filter by applications:" + appNames);
+	}
+
+	if(reportAttributes.get("approvers") != null){
+		for(String approverId : reportAttributes.getList("approvers")){
+			Identity approver = context.getObject(Identity.class, approverId);
+			if(approver != null ){
+				approverNames.add(approver.getName());
+			}
+		}
+		log.debug("Filter by approvers:" + approverNames);
+	}
+}
+
+Boolean checkSecondaryFilters(IdentityRequest ir){
+	log.debug("Enter: checkSecondaryFilters");
+	Boolean shouldInclude = true;
+	//Begin inclusion tests
+	if(appNames.size() > 0 || roleNames.size() > 0 || approverNames.size() > 0){
+		shouldInclude = false;
+	}
+	if(shouldInclude){
+		log.debug("No secondary filtering defined");
+		return shouldInclude;
+	}
+
+	for(IdentityRequestItem iri : ir.getItems()){
+        String name = iri.getName();
+        if(name != null && name.equals("assignedRoles")) {
+            String roleName = iri.getValue();
+            if(roleNames.contains(roleName)){
+            	shouldInclude = true;
+            	break;
+            }
+            
+            Bundle role = context.getObject(Bundle.class, roleName);
+            if(role != null){
+                Set applications = getApplicationsForRole(role);
+                for(String appName : applications){
+                	if(appNames.contains(appName)){
+                		shouldInclude = true;
+                		break;
+                	}
+                }
+            }
+    	}
+    }
+
+    //If we have not yet included the IR, we need to now search for approvers
+    if(!shouldInclude){
+    	if(ir.getApprovalSummaries() != null){
+        	for(WorkflowSummary.ApprovalSummary approvalSummary : ir.getApprovalSummaries()){
+				String approver = approvalSummary.getOwner();
+	            if(approverNames.contains(approver)){
+	            	shouldInclude = true;
+	            	break;
+	            }
+       		}
+   		}
+   	}
+
+   	if(!shouldInclude){
+   		QueryOptions queryOptions = new QueryOptions();
+    	queryOptions.addFilter(Filter.eq("identityRequestId", ir.getName()));
+    	List workItems = context.getObjects(WorkItem.class, queryOptions);
+    	for(WorkItem workItem : workItems){
+            String approver = workItem.getOwner() == null ? "" : workItem.getOwner().getName();
+            if(approverNames.contains(approver)){
+	            shouldInclude = true;
+	            break;
+	        }
+        }
+   	}
+
+	return shouldInclude;
+}
+
+Set getApplicationsForRole(Bundle bundle){
+	Set applications = new TreeSet(String.CASE_INSENSITIVE_ORDER);
+	try{
+        Set visitedBundles = new HashSet();
+        
+        Stack bundles = new Stack();
+        bundles.push(bundle);
+        visitedBundles.add(bundle.getName());
+        while(!bundles.isEmpty()){
+            Bundle bundle1 = bundles.pop();
+            if(visitedBundles.add(bundle1)) {
+                for (Profile profile : bundle1.getProfiles()) {
+                    Application application = profile.getApplication();
+                    if (application != null) {
+                        applications.add(application.getName());
+                    }
+                }
+                for (Bundle required : bundle1.getRequirements()) {
+                    bundles.push(required);
+                }
+            }
+        }
+	}catch (Exception ex){}
+	return applications;
+}
+
+String getDisplayForIdentity(Object identityObjectOrName){
+    StringBuilder sb = new StringBuilder();
+    Identity identity = null;
+    if(identityObjectOrName != null){
+        if(identityObjectOrName instanceof Identity){
+            identity = (Identity)identityObjectOrName;
+        } else if(identityObjectOrName instanceof String){
+            if(identityObjectOrName.length() > 0){
+                identity = context.getObject(Identity.class, identityObjectOrName);
+            }
+        }
+    }
+    
+    if(identity != null){
+        sb.append(identity.getDisplayableName());
+        sb.append(" (" + identity.getName() + ")");
+    }else{
+        sb.append(identityObjectOrName + "(unresolved)");
+    }
+    return sb.toString();
+}
+return runReport();
+]]>
+   </Source>
+</Rule>
