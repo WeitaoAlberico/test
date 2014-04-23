@@ -21,7 +21,7 @@ class ReadWriteFile
 		puts "read file " + @readFileNum.to_s
 		lineNum = 0
 		hasDescription = false
-		if @readFile != nil? && @maxline != nil
+		if @readFile != nil && @maxline != nil
 			puts "start read inside sub-function"
 			File.readlines(@readFile).each do |line|
 				puts "linenum: " + lineNum.to_s
